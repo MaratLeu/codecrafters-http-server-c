@@ -6,16 +6,16 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-
 int main() {
-	setbuf(stdout, NULL);
- 	setbuf(stderr, NULL);
-
+    setbuf(stdout, NULL);
+	setbuf(stderr, NULL);
 
 	int server_fd, client_addr_len;
 	struct sockaddr_in client_addr;
 	//
-	server_fd = socket(AF_INET, SOCK_STREAM, 0);
+	server_fd = socket(AF_INET, SOCK_STREAM, 0);  
+	// socket((int)domain, (int)type, (int)protocol) AF_INET: IPv4, AF_INET6: IPv6, SOCK_STREAM: TCP, SOCK_DGRAM(UDP
+	
 	if (server_fd == -1) {
 		printf("Socket creation failed: %s...\n", strerror(errno));
 		return 1;
@@ -46,13 +46,29 @@ int main() {
 	printf("Waiting for a client to connect...\n");
 	client_addr_len = sizeof(client_addr);
 	//
-	int client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+	int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
 	printf("Client connected\n");
 	//
     char* response = "HTTP/1.1 200 OK\r\n\r\n";
-    send(client, response, strlen(response), 0);
-    
-    close(server_fd);
+	
+	char* buf = (char*) malloc(512);
+	
+	int num_bytes_recv = recv(client, buf, 512 - 1, 0);
+	if (num_bytes_recv <= 0) {
+		printf("Received message failed: %s \n", strerror(errno));
+		return 1;
+	}
+	if (strstr(buf, "GET / ") == NULL) {
+		response = "HTTP/1.1 404 Not Found\r\n\r\n";
+	}			
+	ssize_t send_status = send (client, response, strlen(response), 0);
 
+	if (send_status == -1) {
+		printf("Sending message to client failed: %s \n", strerror(errno));
+		return 1;
+	}
+	free(buf);
+
+    close(server_fd);
 	return 0;
 }
