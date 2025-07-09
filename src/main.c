@@ -49,7 +49,6 @@ int main() {
 	int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
 	printf("Client connected\n");
 	//
-    char* response = "HTTP/1.1 200 OK\r\n\r\n";
 	
 	char* buf = (char*) malloc(512);
 	
@@ -58,9 +57,36 @@ int main() {
 		printf("Received message failed: %s \n", strerror(errno));
 		return 1;
 	}
-	if (strstr(buf, "GET / ") == NULL) {
-		response = "HTTP/1.1 404 Not Found\r\n\r\n";
-	}			
+	buf[num_bytes_recv] = '\0';
+	
+	char response[1024];
+
+	if (strstr(buf, "GET /echo/") != NULL) {
+		char* sub_str = strstr(buf, "/echo/");
+		sub_str += strlen("/echo/");
+		char* end = strchr(sub_str, ' ');
+		size_t len = 0;
+		if (end != NULL) {
+			len = end - sub_str;
+		}
+		else {
+			len = strlen(sub_str);
+		}
+
+		char* echo_str = (char*) malloc(len + 1);
+		strncpy(echo_str, sub_str, len);
+
+		int response_length	= snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
+		free(echo_str);
+	}
+	
+	else if (strstr(buf, "GET / ") == NULL) {
+		snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
+	}
+	else {
+		snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\n\r\n");
+	}
+	
 	ssize_t send_status = send (client, response, strlen(response), 0);
 
 	if (send_status == -1) {
