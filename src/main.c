@@ -80,6 +80,16 @@ int main() {
 		free(echo_str);
 	}
 	
+	else if (strstr(buf, "GET /user-agent ") != NULL) {
+		char* parts= strtok(buf, "\r\n");
+		while(strstr(parts, "User-Agent: ") == NULL) {
+			parts = strtok(NULL, "\r\n"); 
+		}
+		char* echo_str = strchr(parts, ' ');
+	    echo_str += strlen(" ");
+		int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
+	}
+	
 	else if (strstr(buf, "GET / ") == NULL) {
 		snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
 	}
