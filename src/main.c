@@ -46,64 +46,81 @@ int main() {
 	printf("Waiting for a client to connect...\n");
 	client_addr_len = sizeof(client_addr);
 	//
-	int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
-	printf("Client connected\n");
-	//
-	
-	char* buf = (char*) malloc(512);
-	
-	int num_bytes_recv = recv(client, buf, 512 - 1, 0);
-	if (num_bytes_recv <= 0) {
-		printf("Received message failed: %s \n", strerror(errno));
-		return 1;
-	}
-	buf[num_bytes_recv] = '\0';
-	
-	char response[1024];
+	while (1) {
+		int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+		if (client == -1) continue;
+		printf("Client connected\n");
+		//
+	    
+		pid_t pid = fork();
+		pid_t main_pid = getpid();
+		
+		if (pid != 0) {
+			close(client);
+			continue;
+		}
 
-	if (strstr(buf, "GET /echo/") != NULL) {
-		char* sub_str = strstr(buf, "/echo/");
-		sub_str += strlen("/echo/");
-		char* end = strchr(sub_str, ' ');
-		size_t len = 0;
-		if (end != NULL) {
-			len = end - sub_str;
+		char* buf = (char*) malloc(512);
+		
+		int num_bytes_recv = recv(client, buf, 512 - 1, 0);
+		if (num_bytes_recv <= 0) {
+			printf("Received message failed: %s \n", strerror(errno));
+			return 1;
+		}
+		buf[num_bytes_recv] = '\0';
+		
+		char response[1024];
+
+		if (strstr(buf, "GET /echo/") != NULL) {
+			char* sub_str = strstr(buf, "/echo/");
+			sub_str += strlen("/echo/");
+			char* end = strchr(sub_str, ' ');
+			size_t len = 0;
+			if (end != NULL) {
+				len = end - sub_str;
+			}
+			else {
+				len = strlen(sub_str);
+			}
+
+			char* echo_str = (char*) malloc(len + 1);
+			strncpy(echo_str, sub_str, len);
+
+			int response_length	= snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
+			free(echo_str);
+		}
+		
+		else if (strstr(buf, "GET /user-agent ") != NULL) {
+			char* parts= strtok(buf, "\r\n");
+			while(strstr(parts, "User-Agent: ") == NULL) {
+				parts = strtok(NULL, "\r\n"); 
+			}
+			char* echo_str = strchr(parts, ' ');
+			echo_str += strlen(" ");
+			int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
+		}
+		
+		else if (strstr(buf, "GET / ") == NULL) {
+			snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
 		}
 		else {
-			len = strlen(sub_str);
+			snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\n\r\n");
 		}
+		
+		ssize_t send_status = send (client, response, strlen(response), 0);
 
-		char* echo_str = (char*) malloc(len + 1);
-		strncpy(echo_str, sub_str, len);
-
-		int response_length	= snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
-		free(echo_str);
-	}
-	
-	else if (strstr(buf, "GET /user-agent ") != NULL) {
-		char* parts= strtok(buf, "\r\n");
-		while(strstr(parts, "User-Agent: ") == NULL) {
-			parts = strtok(NULL, "\r\n"); 
+		if (send_status == -1) {
+			printf("Sending message to client failed: %s \n", strerror(errno));
+			return 1;
 		}
-		char* echo_str = strchr(parts, ' ');
-	    echo_str += strlen(" ");
-		int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
+		free(buf);
+		
+		close(client);
+		
+		if (pid != main_pid) {
+			exit(0);
+		}
 	}
-	
-	else if (strstr(buf, "GET / ") == NULL) {
-		snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
-	}
-	else {
-		snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\n\r\n");
-	}
-	
-	ssize_t send_status = send (client, response, strlen(response), 0);
-
-	if (send_status == -1) {
-		printf("Sending message to client failed: %s \n", strerror(errno));
-		return 1;
-	}
-	free(buf);
 
     close(server_fd);
 	return 0;
