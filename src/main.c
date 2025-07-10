@@ -69,7 +69,7 @@ int main() {
 		}
 		buf[num_bytes_recv] = '\0';
 		
-		char response[1024];
+		char response[4096];
 
 		if (strstr(buf, "GET /echo/") != NULL) {
 			char* sub_str = strstr(buf, "/echo/");
@@ -99,7 +99,32 @@ int main() {
 			echo_str += strlen(" ");
 			int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
 		}
-		
+		else if (strstr(buf, "GET /files/") != NULL) {
+			char* parts = strtok(buf, " ");
+			while(strstr(parts, "/files/") == NULL) {
+				parts = strtok(NULL, " ");
+			}
+			char* relative_filepath = parts + strlen("/files/");
+			
+			char filepath[256];
+			snprintf(filepath, 256, "/tmp/data/codecrafters.io/http-server-tester/%s", relative_filepath);
+			
+			FILE* file;
+			file = fopen(filepath, "rb");
+			if (file == NULL) {
+				snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
+			}
+			else {
+				fseek(file, 0, SEEK_END);
+				int file_size = ftell(file);
+				rewind(file);
+				char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
+				file_buffer[file_size] = '\0';
+				fread(file_buffer, 1, file_size, file);
+				snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", file_size, file_buffer);
+				fclose(file);
+			}
+		}
 		else if (strstr(buf, "GET / ") == NULL) {
 			snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
 		}
