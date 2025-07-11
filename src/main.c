@@ -6,7 +6,8 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-int main() {
+
+int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
 
@@ -99,7 +100,9 @@ int main() {
 			echo_str += strlen(" ");
 			int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
 		}
+
 		else if (strstr(buf, "GET /files/") != NULL) {
+			char* absolute_filepath = argv[2];
 			char* parts = strtok(buf, " ");
 			while(strstr(parts, "/files/") == NULL) {
 				parts = strtok(NULL, " ");
@@ -107,7 +110,7 @@ int main() {
 			char* relative_filepath = parts + strlen("/files/");
 			
 			char filepath[256];
-			snprintf(filepath, 256, "/tmp/data/codecrafters.io/http-server-tester/%s", relative_filepath);
+			snprintf(filepath, 256, "%s%s", absolute_filepath, relative_filepath);
 			
 			FILE* file;
 			file = fopen(filepath, "rb");
@@ -124,6 +127,48 @@ int main() {
 				snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", file_size, file_buffer);
 				fclose(file);
 			}
+		}
+		else if (strstr(buf, "POST /files/") != NULL) {	
+			char* start = strstr(buf, "POST /files/");
+			start += strlen("POST /files/");
+			char* end = strchr(start, ' ');
+			int fname_len = end - start;
+			
+			char filename[256] = {0};
+			strncpy(filename, start, fname_len);
+			filename[fname_len] = '\0';
+
+			char* content_info = strstr(buf, "Content-Length: ");
+			content_info += strlen("Content-Length: ");
+			
+			char* end_of_line = strstr(content_info, "\r\n");
+
+			int length = end_of_line - content_info;  // количество байт (не сама длина)
+			char length_str[32] = {0};
+			strncpy(length_str, content_info, length);
+			int len = atoi(length_str);
+
+			char* content = strstr(end_of_line, "\r\n\r\n");
+			content += strlen("\r\n\r\n");
+
+			char* absolute_filepath = argv[2];
+			printf("Absolute path: %s\n", absolute_filepath);
+			char filepath[256];
+			snprintf(filepath, 256, "%s%s", absolute_filepath, filename);
+		
+			FILE* file;
+			printf("Filepath: %s\n", filepath);
+			file = fopen(filepath, "wb");
+			if (file == NULL) {
+				printf("Opening file failed: %s \n", strerror(errno));
+			}
+			size_t written_content = fwrite(content, sizeof(char), len, file);
+			fclose(file);
+			if (written_content != len) {
+				printf("Recording data to file failed: %s \n", strerror(errno));
+			}
+
+			snprintf(response, sizeof(response), "HTTP/1.1 201 Created\r\n\r\n");
 		}
 		else if (strstr(buf, "GET / ") == NULL) {
 			snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
