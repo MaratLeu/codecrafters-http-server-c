@@ -76,11 +76,25 @@ HTTP_Request parse_request (char* buf) {
 	strncpy(headers, sub_str + 2, size_of_headers);
 	
 	char request_body[256] = {0};
-	strcpy(request_body, headers_end + 4);
+	strncpy(request_body, headers_end + 4, sizeof(request_body) - 1);
+	request_body[sizeof(request_body) - 1] = '\0';
 
 	// Init HTTP_Request
 	init_HTTP_Request(&request, HTTP_Method, RT, headers, request_body);
 	return request;
+}
+
+int client_supports_gzip(const char* request_headers) {
+	return (strstr(request_headers, "Accept-Encoding: gzip") != NULL);
+}
+
+void add_common_headers(char* buffer, size_t size, int use_gzip, size_t content_length, const char* content_type) {
+	int offset = 0;
+    offset += snprintf(buffer + offset, size - offset, "Content-Type: %s\r\n", content_type);
+    offset += snprintf(buffer + offset, size - offset, "Content-Length: %zu\r\n", content_length);
+    if (use_gzip) {
+        offset += snprintf(buffer + offset, size - offset, "Content-Encoding: gzip\r\n");
+    }
 }
 
 typedef struct  {
@@ -107,7 +121,6 @@ void init_HTTP_Response(HTTP_Response* response, int status, const char* result,
 	response->response_body[sizeof(response->response_body) - 1] = '\0';
 }
 	
-
 int main(int argc, char* argv[]) {
     
 	setbuf(stdout, NULL);
@@ -175,16 +188,21 @@ int main(int argc, char* argv[]) {
 		// Parse HTTP Request
 		HTTP_Request request = parse_request(buf);
 		char http_method[10] = {0};
-		strcpy(http_method, request.request_line.HTTP_Method);
-		
+		strncpy(http_method, request.request_line.HTTP_Method, sizeof(http_method) - 1);
+		http_method[sizeof(http_method) - 1] = '\0';
+
 		char request_target[256] = {0};
-		strcpy(request_target, request.request_line.request_target);
-	
+		strncpy(request_target, request.request_line.request_target, sizeof(request_target) - 1);
+		request_target[sizeof(request_target) - 1] = '\0';
+
 		char request_headers[256] = {0};
-		strcpy(request_headers, request.headers);
+		strncpy(request_headers, request.headers, sizeof(request_headers) - 1);
+		request_headers[sizeof(request_headers) - 1] = '\0';
+		int flag = client_supports_gzip(request_headers);
 
 		char request_body[256] = {0};
-		strcpy(request_body, request.request_body);
+		strncpy(request_body, request.request_body, sizeof(request_body) - 1);
+		request_body[sizeof(request_body) - 1] = '\0';
 
 		char response[4096];
 
@@ -196,7 +214,7 @@ int main(int argc, char* argv[]) {
 				char* echo_str = strstr(request_target, "/echo/");
 				echo_str += strlen("/echo/");
 
-				snprintf(response_headers, 256, "%s text/plain%s%s %d%s", CT, CRLF, CL, (int)strlen(echo_str), CRLF);
+				add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
 				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str);
 			}
 
@@ -207,7 +225,7 @@ int main(int argc, char* argv[]) {
 				}
 				if (parts != NULL) {
 					parts += strlen("User-Agent: ");
-					snprintf(response_headers, 256, "%s text/plain%s%s %d%s", CT, CRLF, CL, (int)strlen(parts), CRLF);
+					add_common_headers(response_headers, sizeof(response_headers), flag, strlen(parts), "text/plain");
 					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts);
 				}
 				else {
@@ -228,12 +246,19 @@ int main(int argc, char* argv[]) {
 				}
 
 				char path_to_file[256];
-				strcpy(path_to_file, argv[2]);
+				strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
+				path_to_file[sizeof(path_to_file) - 1] = '\0';
 
 				char* filename = request_target + strlen("/files/");
 				char relative_filepath[256];
-				snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
-				
+				size_t len = strlen(path_to_file);
+				if (len > 0 && path_to_file[len - 1] != '/') {
+					snprintf(relative_filepath, 256, "%s/%s", path_to_file, filename);
+				}
+				else {
+					snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
+				}
+
 				FILE* file;
 				file = fopen(relative_filepath, "rb");
 				if (file == NULL) {
@@ -246,7 +271,7 @@ int main(int argc, char* argv[]) {
 					char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
 					file_buffer[file_size] = '\0';
 					fread(file_buffer, 1, file_size, file);
-					snprintf(response_headers, 256, "%s application/octet-stream%s%s %d%s", CT, CRLF, CL, file_size, CRLF);
+					add_common_headers(response_headers, sizeof(response_headers), flag, file_size, "application/octet-stream");
 					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer);
 					fclose(file);
 				}
@@ -274,12 +299,19 @@ int main(int argc, char* argv[]) {
 				}
 
 				char path_to_file[256];
-				strcpy(path_to_file, argv[2]);
+				strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
+				path_to_file[sizeof(path_to_file) - 1] = '\0';
 				
 				char* filename = request_target + strlen("/files/");
 				char relative_filepath[256];
-				snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
-				
+				size_t len = strlen(path_to_file);
+				if (len > 0 && path_to_file[len - 1] != '/') {
+					snprintf(relative_filepath, sizeof(relative_filepath), "%s/%s", path_to_file, filename);
+				} 
+				else {
+					snprintf(relative_filepath, sizeof(relative_filepath), "%s%s", path_to_file, filename);
+				}
+
 				FILE* file;
 				file = fopen(relative_filepath, "wb");
 				if (file == NULL) {
