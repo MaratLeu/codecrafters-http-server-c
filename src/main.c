@@ -7,15 +7,117 @@
 #include <errno.h>
 #include <unistd.h>
 
+#define CRLF "\r\n"
+#define HTTP_VERSION "HTTP/1.1"
+#define HTTP_STATUS_OK 200
+#define HTTP_STATUS_NOT_FOUND 404
+#define HTTP_STATUS_CREATED 201
+#define CT "Content-Type:" // Header that specifies the format of the response body
+#define CL "Content-Length:" // Header that specifies the size of the response body, in bytes
+
+typedef struct {
+	char HTTP_Method[10];
+	char request_target[256];
+} RequestLine;
+
+typedef struct {
+	RequestLine request_line;
+	char headers[256];
+	char request_body[256];
+} HTTP_Request;
+
+void init_HTTP_Request(HTTP_Request* request, const char* method, const char* target, const char* headers, const char* request_body) 
+{
+	strncpy(request->request_line.HTTP_Method, method, sizeof(request->request_line.HTTP_Method) - 1);
+	request->request_line.HTTP_Method[sizeof(request->request_line.HTTP_Method) - 1] = '\0';
+
+	strncpy(request->request_line.request_target, target, sizeof(request->request_line.request_target) - 1);
+	request->request_line.request_target[sizeof(request->request_line.request_target) - 1] = '\0';
+	
+	strncpy(request->headers, headers, sizeof(request->headers) - 1);
+	request->headers[sizeof(request->headers) - 1] = '\0';
+	
+	strncpy(request->request_body, request_body, sizeof(request->request_body) - 1);
+	request->request_body[sizeof(request->request_body) - 1] = '\0';
+}
+
+HTTP_Request parse_request (char* buf) {
+	// An exapmle of HTTP Request 
+	// GET /index.html HTTP/1.1\r\nHost: localhost:4221\r\nUser-Agent: cur	l/7.64.1\r\nAccept: */*\r\n\r\n
+	HTTP_Request request = {0};
+	if (buf == NULL) return request;
+
+	// Get Request Line (RL)
+	char* sub_str = strstr(buf, "\r\n"); 
+	if (sub_str == NULL) return request;
+	size_t size_of_RL = sub_str - buf;
+    char request_line[256] = {0};
+	strncpy(request_line, buf, size_of_RL);       
+	
+	// Get HTTP Method
+	char* first_space = strchr(request_line, ' ');
+	if (first_space == NULL) return request;
+	size_t size_of_method = first_space - request_line;
+    char HTTP_Method[10] = {0};
+	strncpy(HTTP_Method, request_line, size_of_method);
+	
+	// Get Request Target (RT)
+	char* second_space = strchr(first_space + 1, ' '); // +1 для того чтобы не указывало на первый пробел
+	if (second_space == NULL) return request;
+	size_t size_of_RT = second_space - (first_space + 1);
+	char RT[256] = {0};
+	strncpy(RT, first_space + 1, size_of_RT);
+	
+	// Get Headers and RequestBody
+	char* headers_end = strstr(sub_str, "\r\n\r\n"); // end of headers cause headers ended with 2 CRLF
+	if (headers_end == NULL) return request;
+	size_t size_of_headers = headers_end - (sub_str + 2);
+	char headers[256] = {0};
+	strncpy(headers, sub_str + 2, size_of_headers);
+	
+	char request_body[256] = {0};
+	strcpy(request_body, headers_end + 4);
+
+	// Init HTTP_Request
+	init_HTTP_Request(&request, HTTP_Method, RT, headers, request_body);
+	return request;
+}
+
+typedef struct  {
+	int status;
+	char result[20];
+} StatusLine;
+
+typedef struct {
+	StatusLine status_line;
+	char headers[256];
+	char response_body[256];
+} HTTP_Response;
+
+void init_HTTP_Response(HTTP_Response* response, int status, const char* result, const char* headers, const char* response_body) {
+	response->status_line.status = status;
+
+	strncpy(response->status_line.result, result, sizeof(response->status_line.result) - 1);
+	response->status_line.result[sizeof(response->status_line.result) - 1] = '\0';
+
+	strncpy(response->headers, headers, sizeof(response->headers) - 1);
+	response->headers[sizeof(response->headers) - 1] = '\0';
+
+	strncpy(response->response_body, response_body, sizeof(response->response_body) - 1);
+	response->response_body[sizeof(response->response_body) - 1] = '\0';
+}
+	
+
 int main(int argc, char* argv[]) {
-    setbuf(stdout, NULL);
+    
+	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
 
 	int server_fd, client_addr_len;
 	struct sockaddr_in client_addr;
 	//
 	server_fd = socket(AF_INET, SOCK_STREAM, 0);  
-	// socket((int)domain, (int)type, (int)protocol) AF_INET: IPv4, AF_INET6: IPv6, SOCK_STREAM: TCP, SOCK_DGRAM(UDP
+	// socket((int)domain, (int)type, (int)protocol) AF_INET: IPv4, AF_INET6: IPv6, SOCK_STREAM: TCP, SOCK_DGRAM(UDP)
 	
 	if (server_fd == -1) {
 		printf("Socket creation failed: %s...\n", strerror(errno));
@@ -61,123 +163,140 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 
-		char* buf = (char*) malloc(512);
-		
-		int num_bytes_recv = recv(client, buf, 512 - 1, 0);
+		char* buf = (char*) malloc(1024);
+
+		int num_bytes_recv = recv(client, buf, 1024 - 1, 0);
 		if (num_bytes_recv <= 0) {
 			printf("Received message failed: %s \n", strerror(errno));
 			return 1;
 		}
 		buf[num_bytes_recv] = '\0';
 		
+		// Parse HTTP Request
+		HTTP_Request request = parse_request(buf);
+		char http_method[10] = {0};
+		strcpy(http_method, request.request_line.HTTP_Method);
+		
+		char request_target[256] = {0};
+		strcpy(request_target, request.request_line.request_target);
+	
+		char request_headers[256] = {0};
+		strcpy(request_headers, request.headers);
+
+		char request_body[256] = {0};
+		strcpy(request_body, request.request_body);
+
 		char response[4096];
 
-		if (strstr(buf, "GET /echo/") != NULL) {
-			char* sub_str = strstr(buf, "/echo/");
-			sub_str += strlen("/echo/");
-			char* end = strchr(sub_str, ' ');
-			size_t len = 0;
-			if (end != NULL) {
-				len = end - sub_str;
+		HTTP_Response http_response = {0};
+		char response_headers[256];
+		if (strcmp(http_method, "GET") == 0) {
+			// GET request 
+			if (strncmp(request_target, "/echo/", strlen("echo")) == 0) {	
+				char* echo_str = strstr(request_target, "/echo/");
+				echo_str += strlen("/echo/");
+
+				snprintf(response_headers, 256, "%s text/plain%s%s %d%s", CT, CRLF, CL, (int)strlen(echo_str), CRLF);
+				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str);
 			}
+
+			else if (strcmp(request_target, "/user-agent") == 0) {
+				char* parts = strtok(request_headers, "\r\n");
+				while(parts != NULL && strncmp(parts, "User-Agent: ", strlen("User-Agent: ")) != 0) {
+					parts = strtok(NULL, "\r\n");
+				}
+				if (parts != NULL) {
+					parts += strlen("User-Agent: ");
+					snprintf(response_headers, 256, "%s text/plain%s%s %d%s", CT, CRLF, CL, (int)strlen(parts), CRLF);
+					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts);
+				}
+				else {
+					printf("User-Agent value not found\n");
+					return 1;
+				}
+			}
+
+			else if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {
+				if (argc < 3) {
+					printf("Not enough arguments\n");
+					return 1;
+				}
+				
+				if (strcmp(argv[1], "--directory") != 0) {
+					printf("There is no flag directory\n");
+					return 1;
+				}
+
+				char path_to_file[256];
+				strcpy(path_to_file, argv[2]);
+
+				char* filename = request_target + strlen("/files/");
+				char relative_filepath[256];
+				snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
+				
+				FILE* file;
+				file = fopen(relative_filepath, "rb");
+				if (file == NULL) {
+					init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "");  
+				}
+				else {
+					fseek(file, 0, SEEK_END);
+					int file_size = ftell(file);
+					rewind(file);
+					char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
+					file_buffer[file_size] = '\0';
+					fread(file_buffer, 1, file_size, file);
+					snprintf(response_headers, 256, "%s application/octet-stream%s%s %d%s", CT, CRLF, CL, file_size, CRLF);
+					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer);
+					fclose(file);
+				}
+			}
+
+			else if (strcmp(request_target, "/") == 0) {
+				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "");
+			}
+
 			else {
-				len = strlen(sub_str);
+				init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "");
 			}
-
-			char* echo_str = (char*) malloc(len + 1);
-			strncpy(echo_str, sub_str, len);
-
-			int response_length	= snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
-			free(echo_str);
 		}
 		
-		else if (strstr(buf, "GET /user-agent ") != NULL) {
-			char* parts= strtok(buf, "\r\n");
-			while(strstr(parts, "User-Agent: ") == NULL) {
-				parts = strtok(NULL, "\r\n"); 
-			}
-			char* echo_str = strchr(parts, ' ');
-			echo_str += strlen(" ");
-			int response_length = snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", (int)strlen(echo_str), echo_str);
-		}
+		else if (strcmp(http_method, "POST") == 0) {
+			if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {	
+				if (argc < 3) {
+					printf("Not enough arguments\n");
+					return 1;
+				}
+				
+				if (strcmp(argv[1], "--directory") != 0) {
+					printf("There is no flag directory\n");
+					return 1;
+				}
 
-		else if (strstr(buf, "GET /files/") != NULL) {
-			char* absolute_filepath = argv[2];
-			char* parts = strtok(buf, " ");
-			while(strstr(parts, "/files/") == NULL) {
-				parts = strtok(NULL, " ");
-			}
-			char* relative_filepath = parts + strlen("/files/");
-			
-			char filepath[256];
-			snprintf(filepath, 256, "%s%s", absolute_filepath, relative_filepath);
-			
-			FILE* file;
-			file = fopen(filepath, "rb");
-			if (file == NULL) {
-				snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
-			}
-			else {
-				fseek(file, 0, SEEK_END);
-				int file_size = ftell(file);
-				rewind(file);
-				char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
-				file_buffer[file_size] = '\0';
-				fread(file_buffer, 1, file_size, file);
-				snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", file_size, file_buffer);
+				char path_to_file[256];
+				strcpy(path_to_file, argv[2]);
+				
+				char* filename = request_target + strlen("/files/");
+				char relative_filepath[256];
+				snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
+				
+				FILE* file;
+				file = fopen(relative_filepath, "wb");
+				if (file == NULL) {
+					printf("Opening file failed: %s\n", strerror(errno));
+				}
+				size_t written_content = fwrite(request_body, sizeof(char), strlen(request_body), file);
 				fclose(file);
+				if (written_content != strlen(request_body)) {
+					printf("Recording data to file failed: %s \n", strerror(errno));
+				}
+				init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "");	
 			}
-		}
-		else if (strstr(buf, "POST /files/") != NULL) {	
-			char* start = strstr(buf, "POST /files/");
-			start += strlen("POST /files/");
-			char* end = strchr(start, ' ');
-			int fname_len = end - start;
-			
-			char filename[256] = {0};
-			strncpy(filename, start, fname_len);
-			filename[fname_len] = '\0';
-
-			char* content_info = strstr(buf, "Content-Length: ");
-			content_info += strlen("Content-Length: ");
-			
-			char* end_of_line = strstr(content_info, "\r\n");
-
-			int length = end_of_line - content_info;  // количество байт (не сама длина)
-			char length_str[32] = {0};
-			strncpy(length_str, content_info, length);
-			int len = atoi(length_str);
-
-			char* content = strstr(end_of_line, "\r\n\r\n");
-			content += strlen("\r\n\r\n");
-
-			char* absolute_filepath = argv[2];
-			printf("Absolute path: %s\n", absolute_filepath);
-			char filepath[256];
-			snprintf(filepath, 256, "%s%s", absolute_filepath, filename);
-		
-			FILE* file;
-			printf("Filepath: %s\n", filepath);
-			file = fopen(filepath, "wb");
-			if (file == NULL) {
-				printf("Opening file failed: %s \n", strerror(errno));
-			}
-			size_t written_content = fwrite(content, sizeof(char), len, file);
-			fclose(file);
-			if (written_content != len) {
-				printf("Recording data to file failed: %s \n", strerror(errno));
-			}
-
-			snprintf(response, sizeof(response), "HTTP/1.1 201 Created\r\n\r\n");
-		}
-		else if (strstr(buf, "GET / ") == NULL) {
-			snprintf(response, sizeof(response), "HTTP/1.1 404 Not Found\r\n\r\n");
-		}
-		else {
-			snprintf(response, sizeof(response), "HTTP/1.1 200 OK\r\n\r\n");
 		}
 		
-		ssize_t send_status = send (client, response, strlen(response), 0);
+		snprintf(response, 4096, "%s %d %s%s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
+				 http_response.headers, CRLF, http_response.response_body); 
+		size_t send_status = send (client, response, strlen(response), 0);
 
 		if (send_status == -1) {
 			printf("Sending message to client failed: %s \n", strerror(errno));
