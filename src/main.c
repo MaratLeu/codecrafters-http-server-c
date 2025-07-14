@@ -85,7 +85,21 @@ HTTP_Request parse_request (char* buf) {
 }
 
 int client_supports_gzip(const char* request_headers) {
-	return (strstr(request_headers, "Accept-Encoding: gzip") != NULL);
+	char* ptr = strstr(request_headers, "Accept-Encoding: ");
+	if (ptr == NULL) {
+		return 0;
+	}
+	else {
+		char* compression_schemes = ptr + strlen("Accept-Encoding: ");
+		char* scheme = strtok(compression_schemes, " ,");
+		while(scheme != NULL) {
+			if (strcmp(scheme, "gzip") == 0) {
+				return 1;
+			}
+			scheme = strtok(NULL, " ,");
+		}
+		return 0;
+	}
 }
 
 void add_common_headers(char* buffer, size_t size, int use_gzip, size_t content_length, const char* content_type) {
