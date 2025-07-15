@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #define CRLF "\r\n"
 #define HTTP_VERSION "HTTP/1.1"
@@ -111,6 +112,33 @@ void add_common_headers(char* buffer, size_t size, int use_gzip, size_t content_
     }
 }
 
+int compress_to_gzip(const char* input, int inputSize, char* output, int outputSize) {
+	z_stream zs;
+	zs.zalloc = Z_NULL;
+	zs.opaque = Z_NULL;
+	zs.zfree = Z_NULL;
+	
+	if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+		return -1;
+	}
+	zs.avail_in = (uInt) inputSize;
+	zs.next_in = (Bytef *) input; 
+	
+	zs.avail_out = (uInt) outputSize;
+	zs.next_out = (Bytef *) output;
+
+	int result = deflate(&zs, Z_FINISH);
+	if (result != Z_STREAM_END) {
+		deflateEnd(&zs);
+		return -1;
+	}
+	if (deflateEnd(&zs) != Z_OK) {
+		return -1;
+	}
+
+	return zs.total_out;
+}
+
 typedef struct  {
 	int status;
 	char result[20];
@@ -120,9 +148,10 @@ typedef struct {
 	StatusLine status_line;
 	char headers[256];
 	char response_body[256];
+	size_t body_length;
 } HTTP_Response;
 
-void init_HTTP_Response(HTTP_Response* response, int status, const char* result, const char* headers, const char* response_body) {
+void init_HTTP_Response(HTTP_Response* response, int status, const char* result, const char* headers, const char* response_body, size_t body_len) {
 	response->status_line.status = status;
 
 	strncpy(response->status_line.result, result, sizeof(response->status_line.result) - 1);
@@ -130,13 +159,15 @@ void init_HTTP_Response(HTTP_Response* response, int status, const char* result,
 
 	strncpy(response->headers, headers, sizeof(response->headers) - 1);
 	response->headers[sizeof(response->headers) - 1] = '\0';
-
-	strncpy(response->response_body, response_body, sizeof(response->response_body) - 1);
-	response->response_body[sizeof(response->response_body) - 1] = '\0';
+	
+	if (body_len > sizeof(response -> response_body)) {
+		body_len = sizeof(response -> response_body);
+	}
+	memcpy(response -> response_body, response_body, body_len);
+	response -> body_length = body_len;
 }
 	
-int main(int argc, char* argv[]) {
-    
+int main(int argc, char* argv[]) {    
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
 
@@ -228,8 +259,22 @@ int main(int argc, char* argv[]) {
 				char* echo_str = strstr(request_target, "/echo/");
 				echo_str += strlen("/echo/");
 
-				add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
-				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str);
+				if (flag == 1) {
+					char compress_body[256];
+					int compressed_size = compress_to_gzip(echo_str, strlen(echo_str), compress_body, sizeof(compress_body));
+					if (compressed_size > 0) {
+						add_common_headers(response_headers, sizeof(response_headers), flag, compressed_size, "text/plain");
+						init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, compress_body, compressed_size);
+					}
+					else {
+						printf("Error while compressing: %s\n", strerror(errno));
+						return 1;
+					}
+				}
+				else {
+					add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
+					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str, strlen(echo_str));
+				}
 			}
 
 			else if (strcmp(request_target, "/user-agent") == 0) {
@@ -240,7 +285,7 @@ int main(int argc, char* argv[]) {
 				if (parts != NULL) {
 					parts += strlen("User-Agent: ");
 					add_common_headers(response_headers, sizeof(response_headers), flag, strlen(parts), "text/plain");
-					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts);
+					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts, strlen(parts));
 				}
 				else {
 					printf("User-Agent value not found\n");
@@ -276,7 +321,7 @@ int main(int argc, char* argv[]) {
 				FILE* file;
 				file = fopen(relative_filepath, "rb");
 				if (file == NULL) {
-					init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "");  
+					init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);  
 				}
 				else {
 					fseek(file, 0, SEEK_END);
@@ -286,17 +331,17 @@ int main(int argc, char* argv[]) {
 					file_buffer[file_size] = '\0';
 					fread(file_buffer, 1, file_size, file);
 					add_common_headers(response_headers, sizeof(response_headers), flag, file_size, "application/octet-stream");
-					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer);
+					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer, strlen(file_buffer));
 					fclose(file);
 				}
 			}
 
 			else if (strcmp(request_target, "/") == 0) {
-				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "");
+				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "", 0);
 			}
 
 			else {
-				init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "");
+				init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);
 			}
 		}
 		
@@ -336,12 +381,16 @@ int main(int argc, char* argv[]) {
 				if (written_content != strlen(request_body)) {
 					printf("Recording data to file failed: %s \n", strerror(errno));
 				}
-				init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "");	
+				init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "", 0);	
 			}
 		}
 		
-		snprintf(response, 4096, "%s %d %s%s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
-				 http_response.headers, CRLF, http_response.response_body); 
+		// Sending response to server
+		char header_buf[256];
+		int header_len = snprintf(header_buf, sizeof(header_buf), "%s %d %s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
+				 http_response.headers, CRLF); 
+		send(client, header_buf, header_len, 0);
+		send(client, http_response.response_body, http_response.body_length, 0);
 		size_t send_status = send (client, response, strlen(response), 0);
 
 		if (send_status == -1) {
