@@ -342,7 +342,12 @@ int main(int argc, char* argv[]) {
 					}
 
 					else if (strcmp(request_target, "/") == 0) {
-						init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "", 0);
+						if (!close_flag) {
+							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "", 0);
+						}
+						else {	
+							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "Connection: close\r\n", "", 0);
+						}
 					}
 
 					else {
