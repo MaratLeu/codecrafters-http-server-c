@@ -205,205 +205,207 @@ int main(int argc, char* argv[]) {
 	}
 	//
 	printf("Waiting for a client to connect...\n");
-	client_addr_len = sizeof(client_addr);
-	//
 	while (1) {
-		int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
-		if (client == -1) continue;
-		printf("Client connected\n");
+		client_addr_len = sizeof(client_addr);
 		//
-	    
-		pid_t pid = fork();
-		pid_t main_pid = getpid();
-		
-		if (pid != 0) {
-			close(client);
-			continue;
-		}
-
-		char* buf = (char*) malloc(1024);
-
-		int num_bytes_recv = recv(client, buf, 1024 - 1, 0);
-		if (num_bytes_recv <= 0) {
-			printf("Received message failed: %s \n", strerror(errno));
+		int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+		if (client == -1) {
+			printf("Error while connecting client: %s\n", strerror(errno));
 			return 1;
 		}
-		buf[num_bytes_recv] = '\0';
-		
-		// Parse HTTP Request
-		HTTP_Request request = parse_request(buf);
-		char http_method[10] = {0};
-		strncpy(http_method, request.request_line.HTTP_Method, sizeof(http_method) - 1);
-		http_method[sizeof(http_method) - 1] = '\0';
+		printf("Client connected\n");
 
-		char request_target[256] = {0};
-		strncpy(request_target, request.request_line.request_target, sizeof(request_target) - 1);
-		request_target[sizeof(request_target) - 1] = '\0';
+		if (!fork()) {
+			close(server_fd);
+			while(1) {	
+				char* buf = (char*) malloc(1024);
 
-		char request_headers[256] = {0};
-		strncpy(request_headers, request.headers, sizeof(request_headers) - 1);
-		request_headers[sizeof(request_headers) - 1] = '\0';
-		int flag = client_supports_gzip(request_headers);
+				int num_bytes_recv = recv(client, buf, 1024 - 1, 0);
+				if (num_bytes_recv <= 0) {
+					printf("Received message failed: %s \n", strerror(errno));
+					return 1;
+				}
+				buf[num_bytes_recv] = '\0';
+				
+				// Parse HTTP Request
+				HTTP_Request request = parse_request(buf);
+				char http_method[10] = {0};
+				strncpy(http_method, request.request_line.HTTP_Method, sizeof(http_method) - 1);
+				http_method[sizeof(http_method) - 1] = '\0';
 
-		char request_body[256] = {0};
-		strncpy(request_body, request.request_body, sizeof(request_body) - 1);
-		request_body[sizeof(request_body) - 1] = '\0';
+				char request_target[256] = {0};
+				strncpy(request_target, request.request_line.request_target, sizeof(request_target) - 1);
+				request_target[sizeof(request_target) - 1] = '\0';
 
-		char response[4096];
+				char request_headers[256] = {0};
+				strncpy(request_headers, request.headers, sizeof(request_headers) - 1);
+				request_headers[sizeof(request_headers) - 1] = '\0';
+				int flag = client_supports_gzip(request_headers);
 
-		HTTP_Response http_response = {0};
-		char response_headers[256];
-		if (strcmp(http_method, "GET") == 0) {
-			// GET request 
-			if (strncmp(request_target, "/echo/", strlen("echo")) == 0) {	
-				char* echo_str = strstr(request_target, "/echo/");
-				echo_str += strlen("/echo/");
+				char request_body[256] = {0};
+				strncpy(request_body, request.request_body, sizeof(request_body) - 1);
+				request_body[sizeof(request_body) - 1] = '\0';
 
-				if (flag == 1) {
-					char compress_body[256];
-					int compressed_size = compress_to_gzip(echo_str, strlen(echo_str), compress_body, sizeof(compress_body));
-					if (compressed_size > 0) {
-						add_common_headers(response_headers, sizeof(response_headers), flag, compressed_size, "text/plain");
-						init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, compress_body, compressed_size);
+				char response[4096];
+
+				HTTP_Response http_response = {0};
+				char response_headers[256];
+				
+				if (strstr(request_headers, "Connection: close") != NULL) {
+					free(buf);
+					break;
+				}
+
+				if (strcmp(http_method, "GET") == 0) {
+					// GET request 
+					if (strncmp(request_target, "/echo/", strlen("echo")) == 0) {	
+						char* echo_str = strstr(request_target, "/echo/");
+						echo_str += strlen("/echo/");
+
+						if (flag == 1) {
+							char compress_body[256];
+							int compressed_size = compress_to_gzip(echo_str, strlen(echo_str), compress_body, sizeof(compress_body));
+							if (compressed_size > 0) {
+								add_common_headers(response_headers, sizeof(response_headers), flag, compressed_size, "text/plain");
+								init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, compress_body, compressed_size);
+							}
+							else {
+								printf("Error while compressing: %s\n", strerror(errno));
+								return 1;
+							}
+						}
+						else {
+							add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
+							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str, strlen(echo_str));
+						}
 					}
+
+					else if (strcmp(request_target, "/user-agent") == 0) {
+						char* parts = strtok(request_headers, "\r\n");
+						while(parts != NULL && strncmp(parts, "User-Agent: ", strlen("User-Agent: ")) != 0) {
+							parts = strtok(NULL, "\r\n");
+						}
+						if (parts != NULL) {
+							parts += strlen("User-Agent: ");
+							add_common_headers(response_headers, sizeof(response_headers), flag, strlen(parts), "text/plain");
+							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts, strlen(parts));
+						}
+						else {
+							printf("User-Agent value not found\n");
+							return 1;
+						}
+					}
+
+					else if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {
+						if (argc < 3) {
+							printf("Not enough arguments\n");
+							return 1;
+						}
+						
+						if (strcmp(argv[1], "--directory") != 0) {
+							printf("There is no flag directory\n");
+							return 1;
+						}
+
+						char path_to_file[256];
+						strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
+						path_to_file[sizeof(path_to_file) - 1] = '\0';
+
+						char* filename = request_target + strlen("/files/");
+						char relative_filepath[256];
+						size_t len = strlen(path_to_file);
+						if (len > 0 && path_to_file[len - 1] != '/') {
+							snprintf(relative_filepath, 256, "%s/%s", path_to_file, filename);
+						}
+						else {
+							snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
+						}
+
+						FILE* file;
+						file = fopen(relative_filepath, "rb");
+						if (file == NULL) {
+							init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);  
+						}
+						else {
+							fseek(file, 0, SEEK_END);
+							int file_size = ftell(file);
+							rewind(file);
+							char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
+							file_buffer[file_size] = '\0';
+							fread(file_buffer, 1, file_size, file);
+							add_common_headers(response_headers, sizeof(response_headers), flag, file_size, "application/octet-stream");
+							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer, strlen(file_buffer));
+							fclose(file);
+						}
+					}
+
+					else if (strcmp(request_target, "/") == 0) {
+						init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "", 0);
+					}
+
 					else {
-						printf("Error while compressing: %s\n", strerror(errno));
-						return 1;
+						init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);
 					}
 				}
-				else {
-					add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
-					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str, strlen(echo_str));
-				}
-			}
+				
+				else if (strcmp(http_method, "POST") == 0) {
+					if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {	
+						if (argc < 3) {
+							printf("Not enough arguments\n");
+							return 1;
+						}
+						
+						if (strcmp(argv[1], "--directory") != 0) {
+							printf("There is no flag directory\n");
+							return 1;
+						}
 
-			else if (strcmp(request_target, "/user-agent") == 0) {
-				char* parts = strtok(request_headers, "\r\n");
-				while(parts != NULL && strncmp(parts, "User-Agent: ", strlen("User-Agent: ")) != 0) {
-					parts = strtok(NULL, "\r\n");
-				}
-				if (parts != NULL) {
-					parts += strlen("User-Agent: ");
-					add_common_headers(response_headers, sizeof(response_headers), flag, strlen(parts), "text/plain");
-					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts, strlen(parts));
-				}
-				else {
-					printf("User-Agent value not found\n");
-					return 1;
-				}
-			}
+						char path_to_file[256];
+						strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
+						path_to_file[sizeof(path_to_file) - 1] = '\0';
+						
+						char* filename = request_target + strlen("/files/");
+						char relative_filepath[256];
+						size_t len = strlen(path_to_file);
+						if (len > 0 && path_to_file[len - 1] != '/') {
+							snprintf(relative_filepath, sizeof(relative_filepath), "%s/%s", path_to_file, filename);
+						} 
+						else {
+							snprintf(relative_filepath, sizeof(relative_filepath), "%s%s", path_to_file, filename);
+						}
 
-			else if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {
-				if (argc < 3) {
-					printf("Not enough arguments\n");
-					return 1;
+						FILE* file;
+						file = fopen(relative_filepath, "wb");
+						if (file == NULL) {
+							printf("Opening file failed: %s\n", strerror(errno));
+						}
+						size_t written_content = fwrite(request_body, sizeof(char), strlen(request_body), file);
+						fclose(file);
+						if (written_content != strlen(request_body)) {
+							printf("Recording data to file failed: %s \n", strerror(errno));
+						}
+						init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "", 0);	
+					}
 				}
 				
-				if (strcmp(argv[1], "--directory") != 0) {
-					printf("There is no flag directory\n");
+				// Sending response to server
+				char header_buf[256];
+				int header_len = snprintf(header_buf, sizeof(header_buf), "%s %d %s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
+						 http_response.headers, CRLF); 
+				send(client, header_buf, header_len, 0);
+				send(client, http_response.response_body, http_response.body_length, 0);
+				size_t send_status = send (client, response, strlen(response), 0);
+
+				if (send_status == -1) {
+					printf("Sending message to client failed: %s \n", strerror(errno));
 					return 1;
 				}
-
-				char path_to_file[256];
-				strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
-				path_to_file[sizeof(path_to_file) - 1] = '\0';
-
-				char* filename = request_target + strlen("/files/");
-				char relative_filepath[256];
-				size_t len = strlen(path_to_file);
-				if (len > 0 && path_to_file[len - 1] != '/') {
-					snprintf(relative_filepath, 256, "%s/%s", path_to_file, filename);
-				}
-				else {
-					snprintf(relative_filepath, 256, "%s%s", path_to_file, filename);
-				}
-
-				FILE* file;
-				file = fopen(relative_filepath, "rb");
-				if (file == NULL) {
-					init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);  
-				}
-				else {
-					fseek(file, 0, SEEK_END);
-					int file_size = ftell(file);
-					rewind(file);
-					char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
-					file_buffer[file_size] = '\0';
-					fread(file_buffer, 1, file_size, file);
-					add_common_headers(response_headers, sizeof(response_headers), flag, file_size, "application/octet-stream");
-					init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer, strlen(file_buffer));
-					fclose(file);
-				}
+				free(buf);		
 			}
-
-			else if (strcmp(request_target, "/") == 0) {
-				init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", "", "", 0);
-			}
-
-			else {
-				init_HTTP_Response(&http_response, HTTP_STATUS_NOT_FOUND, "Not Found", "", "", 0);
-			}
-		}
-		
-		else if (strcmp(http_method, "POST") == 0) {
-			if (strncmp(request_target, "/files/", strlen("/files/")) == 0) {	
-				if (argc < 3) {
-					printf("Not enough arguments\n");
-					return 1;
-				}
-				
-				if (strcmp(argv[1], "--directory") != 0) {
-					printf("There is no flag directory\n");
-					return 1;
-				}
-
-				char path_to_file[256];
-				strncpy(path_to_file, argv[2], sizeof(path_to_file) - 1);
-				path_to_file[sizeof(path_to_file) - 1] = '\0';
-				
-				char* filename = request_target + strlen("/files/");
-				char relative_filepath[256];
-				size_t len = strlen(path_to_file);
-				if (len > 0 && path_to_file[len - 1] != '/') {
-					snprintf(relative_filepath, sizeof(relative_filepath), "%s/%s", path_to_file, filename);
-				} 
-				else {
-					snprintf(relative_filepath, sizeof(relative_filepath), "%s%s", path_to_file, filename);
-				}
-
-				FILE* file;
-				file = fopen(relative_filepath, "wb");
-				if (file == NULL) {
-					printf("Opening file failed: %s\n", strerror(errno));
-				}
-				size_t written_content = fwrite(request_body, sizeof(char), strlen(request_body), file);
-				fclose(file);
-				if (written_content != strlen(request_body)) {
-					printf("Recording data to file failed: %s \n", strerror(errno));
-				}
-				init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "", 0);	
-			}
-		}
-		
-		// Sending response to server
-		char header_buf[256];
-		int header_len = snprintf(header_buf, sizeof(header_buf), "%s %d %s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
-				 http_response.headers, CRLF); 
-		send(client, header_buf, header_len, 0);
-		send(client, http_response.response_body, http_response.body_length, 0);
-		size_t send_status = send (client, response, strlen(response), 0);
-
-		if (send_status == -1) {
-			printf("Sending message to client failed: %s \n", strerror(errno));
-			return 1;
-		}
-		free(buf);
-		
-		close(client);
-		
-		if (pid != main_pid) {
+			close(client);
 			exit(0);
 		}
+		close(client);
 	}
 
     close(server_fd);
