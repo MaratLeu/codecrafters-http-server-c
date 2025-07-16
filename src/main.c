@@ -103,13 +103,16 @@ int client_supports_gzip(const char* request_headers) {
 	}
 }
 
-void add_common_headers(char* buffer, size_t size, int use_gzip, size_t content_length, const char* content_type) {
+void add_common_headers(char* buffer, size_t size, int use_gzip, int close_connection, size_t content_length, const char* content_type) {
 	int offset = 0;
     offset += snprintf(buffer + offset, size - offset, "Content-Type: %s\r\n", content_type);
     offset += snprintf(buffer + offset, size - offset, "Content-Length: %zu\r\n", content_length);
     if (use_gzip) {
         offset += snprintf(buffer + offset, size - offset, "Content-Encoding: gzip\r\n");
     }
+	if (close_connection) {
+		offset += snprintf(buffer + offset, size - offset, "Connection: close\r\n");
+	}
 }
 
 int compress_to_gzip(const char* input, int inputSize, char* output, int outputSize) {
@@ -214,7 +217,7 @@ int main(int argc, char* argv[]) {
 			return 1;
 		}
 		printf("Client connected\n");
-
+		int close_flag = 0;
 		if (!fork()) {
 			close(server_fd);
 			while(1) {	
@@ -250,12 +253,11 @@ int main(int argc, char* argv[]) {
 
 				HTTP_Response http_response = {0};
 				char response_headers[256];
-				
-				if (strstr(request_headers, "Connection: close") != NULL) {
-					free(buf);
-					break;
-				}
+				response_headers[0] = '\0';
 
+				if (strstr(request_headers, "Connection: close") != NULL) {
+					close_flag = 1;
+				}
 				if (strcmp(http_method, "GET") == 0) {
 					// GET request 
 					if (strncmp(request_target, "/echo/", strlen("echo")) == 0) {	
@@ -266,7 +268,7 @@ int main(int argc, char* argv[]) {
 							char compress_body[256];
 							int compressed_size = compress_to_gzip(echo_str, strlen(echo_str), compress_body, sizeof(compress_body));
 							if (compressed_size > 0) {
-								add_common_headers(response_headers, sizeof(response_headers), flag, compressed_size, "text/plain");
+								add_common_headers(response_headers, sizeof(response_headers), flag, close_flag, compressed_size, "text/plain");
 								init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, compress_body, compressed_size);
 							}
 							else {
@@ -275,7 +277,7 @@ int main(int argc, char* argv[]) {
 							}
 						}
 						else {
-							add_common_headers(response_headers, sizeof(response_headers), flag, strlen(echo_str), "text/plain");
+							add_common_headers(response_headers, sizeof(response_headers), flag, close_flag, strlen(echo_str), "text/plain");
 							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, echo_str, strlen(echo_str));
 						}
 					}
@@ -287,7 +289,7 @@ int main(int argc, char* argv[]) {
 						}
 						if (parts != NULL) {
 							parts += strlen("User-Agent: ");
-							add_common_headers(response_headers, sizeof(response_headers), flag, strlen(parts), "text/plain");
+							add_common_headers(response_headers, sizeof(response_headers), flag, close_flag, strlen(parts), "text/plain");
 							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, parts, strlen(parts));
 						}
 						else {
@@ -333,7 +335,7 @@ int main(int argc, char* argv[]) {
 							char* file_buffer = (char*) malloc(file_size + 1); // size + 1 for null terminator
 							file_buffer[file_size] = '\0';
 							fread(file_buffer, 1, file_size, file);
-							add_common_headers(response_headers, sizeof(response_headers), flag, file_size, "application/octet-stream");
+							add_common_headers(response_headers, sizeof(response_headers), flag, close_flag, file_size, "application/octet-stream");
 							init_HTTP_Response(&http_response, HTTP_STATUS_OK, "OK", response_headers, file_buffer, strlen(file_buffer));
 							fclose(file);
 						}
@@ -387,20 +389,15 @@ int main(int argc, char* argv[]) {
 						init_HTTP_Response(&http_response, HTTP_STATUS_CREATED, "Created", "", "", 0);	
 					}
 				}
-				
+			    printf("Response headers:\n%s\n", response_headers);	
 				// Sending response to server
 				char header_buf[256];
 				int header_len = snprintf(header_buf, sizeof(header_buf), "%s %d %s%s%s%s", HTTP_VERSION, http_response.status_line.status, http_response.status_line.result, CRLF, 
 						 http_response.headers, CRLF); 
 				send(client, header_buf, header_len, 0);
 				send(client, http_response.response_body, http_response.body_length, 0);
-				size_t send_status = send (client, response, strlen(response), 0);
-
-				if (send_status == -1) {
-					printf("Sending message to client failed: %s \n", strerror(errno));
-					return 1;
-				}
 				free(buf);		
+				if (close_flag) break;
 			}
 			close(client);
 			exit(0);
